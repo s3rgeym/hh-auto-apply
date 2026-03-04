@@ -84,10 +84,12 @@ class HHAutoApplier:
         self.search_params = parse_qs(parsed.query)
         self.cookies_path = Path(cookies_filename)
         self.session = self.get_session()
-        self.xsrf_token = {c.name: c.value for c in self.session.cookies}.get("_xsrf")
-        assert self.xsrf_token, "xsrf token not found in cookies"
         self.resume_hash = resume_hash or self.get_latest_resume_hash()
         logger.info(f"Resume hash: {self.resume_hash}")
+
+    @property
+    def xsrf_token(self) -> str | None:
+        return next((c.value for c in self.session.cookies if c.name == "_xsrf"), None)
 
     def resolve_url(self, url: str) -> str:
         return urljoin(self.base_url, url)
@@ -209,7 +211,10 @@ class HHAutoApplier:
             if not vacancies:
                 break
             yield from vacancies
-            time.sleep(random.uniform(1.0, 3.0))
+            self.rand_delay(max_sec=5.0)
+
+    def rand_delay(self, min_sec: float = 1.0, max_sec: float = 3.0) -> None:
+        time.sleep(random.uniform(min_sec, max_sec))
 
     def apply_vacancies(self) -> None:
         try:
@@ -237,7 +242,7 @@ class HHAutoApplier:
                         else ""
                     ).replace("%vacancyName%", vacancy_name)
 
-                    time.sleep(random.uniform(1.0, 3.0))
+                    self.rand_delay()
 
                     if vacancy.get("userTestPresent"):
                         logger.debug(
