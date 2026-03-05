@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  # Основной контейнер с приложением
+  hh-app:
+    build: .
+    container_name: hh-app
+    # Оставляем контейнер запущенным, чтобы Ofelia могла заходить в него по расписанию
+    command: tail -f /dev/null
+    env_file: .env
+    volumes:
+      - ./cookies.txt:/app/cookies.txt:ro
+      - ./letter.txt:/app/letter.txt:ro
+    labels:
+      ofelia.enabled: "true"
+      # Расписание берется из .env
+      ofelia.job-exec.hh-apply.schedule: ${OFELIA_SCHEDULE:-@every 4h}
+      ofelia.job-exec.hh-apply.command: "python main.py -u $SEARCH_URL"
+
+  # Планировщик Ofelia
+  scheduler:
+    image: mcuadros/ofelia:latest
+    container_name: hh-scheduler
+    depends_on:
+      - hh-app
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: always

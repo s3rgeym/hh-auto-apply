@@ -31,6 +31,7 @@ Vacancy = TypedDict(
         "allowChatWithManager": bool,
         "civilLawContracts": list[dict[str, Any]],
         "employment": dict[str, str],
+        "links": dict[str, str],
         "name": str,
         "professionalRoleIds": list[dict[str, Any]],
         "responsesCount": int,
@@ -44,16 +45,19 @@ Vacancy = TypedDict(
         "workExperience": str,
         "workFormats": list[dict[str, Any]],
         "workingTimeIntervals": list[dict[str, Any]],
-        "links": dict[str, str],
     },
 )
 
 
 def rand_text(s: str) -> str:
     while (
-        temp := re.sub(r"{([^{}]+)}", lambda m: random.choice(m.group(1).split("|")), s)
+        s1 := re.sub(
+            r"{([^{}]+)}",
+            lambda m: random.choice(m.group(1).split("|")),
+            s,
+        )
     ) != s:
-        s = temp
+        s = s1
     return s
 
 
@@ -68,7 +72,7 @@ class HHAutoApplier:
         self,
         search_url: str,
         cookies_filename: str,
-        resume_hash: str | None = None,
+        resume_id: str | None = None,
         letter_file: str | None = None,
         force_letter: bool = False,
     ) -> None:
@@ -80,12 +84,11 @@ class HHAutoApplier:
         )
         parsed = urlparse(search_url)
         self.base_url = f"{parsed.scheme}://{parsed.netloc}"
-        self.base_search_url = parsed._replace(query="", fragment="").geturl()
+        # self.base_search_url = parsed._replace(query="", fragment="").geturl()
         self.search_params = parse_qs(parsed.query)
         self.cookies_path = Path(cookies_filename)
         self.session = self.get_session()
-        self.resume_hash = resume_hash or self.get_latest_resume_hash()
-        logger.info(f"Resume hash: {self.resume_hash}")
+        self.resume_id = resume_id or self.get_latest_resume_hash()
 
     @property
     def xsrf_token(self) -> str | None:
@@ -97,7 +100,8 @@ class HHAutoApplier:
     def request(
         self, method: str, endpoint: str, *args: Any, **kwargs: Any
     ) -> requests.Response:
-        return self.session.request(method, self.resolve_url(endpoint), *args, **kwargs)
+        url = self.resolve_url(endpoint)
+        return self.session.request(method, url, *args, **kwargs)
 
     def get_latest_resume_hash(self) -> str:
         r = self.request("GET", "/applicant/resumes")
@@ -159,7 +163,7 @@ class HHAutoApplier:
         payload = {
             "_xsrf": self.xsrf_token,
             "vacancy_id": vacancy_id,
-            "resume_hash": self.resume_hash,
+            "resume_hash": self.resume_id,
             "letter": letter,
             "ignore_postponed": "true",
         }
@@ -180,7 +184,7 @@ class HHAutoApplier:
             "startTime": test_data["startTime"],
             "testRequired": test_data["required"],
             "vacancy_id": vacancy_id,
-            "resume_hash": self.resume_hash,
+            "resume_hash": self.resume_id,
             "ignore_postponed": "true",
             "incomplete": "false",
             "lux": "true",
@@ -204,7 +208,7 @@ class HHAutoApplier:
         for page in count():
             params = self.search_params | {"page": [str(page)]}
             logger.debug(f"Ищем вакансии: {params}")
-            response = self.session.get(self.base_search_url, params=params)
+            response = self.request("GET", "/search/vacancy", params=params)
             temp = response.text.split(',"vacancies":')[1]
             vacancies, _ = self.json_decoder.raw_decode(temp)
             logger.debug("Найдено вакансий на странице: %d", len(vacancies))
@@ -268,7 +272,7 @@ class HHAutoApplier:
 
                     assert result.get("success")
                     print(
-                        f"Отправили отклик на вакансию {vacancy_url} - {vacancy_name:.255s} (откликов: {vacancy['totalResponsesCount']})",
+                        f"Отправили отклик на {vacancy_url}: {vacancy_name} (откликов: {vacancy['totalResponsesCount']})"
                     )
                 except requests.RequestException as ex:
                     logger.error(ex)
@@ -290,7 +294,12 @@ def main() -> None | int:
         "--letter-file",
         "--letter",
         default="letter.txt",
-        help="Файл с сопроводительным письмом. Выбор случайного варианта: {вариант 1|вариант 2|вариант 3}. Варианты могут быть вложенными. %%vacancyName%% будет заменено на название вакансии.",
+        help=(
+            "Файл с сопроводительным письмом."
+            " Выбор случайного варианта: {вариант 1|вариант 2|вариант 3}."
+            " Варианты могут быть вложенными."
+            " %%vacancyName%% будет заменено на название вакансии."
+        ),
     )
     parser.add_argument(
         "-f",
@@ -309,7 +318,7 @@ def main() -> None | int:
     applier = HHAutoApplier(
         search_url=args.url,
         cookies_filename=args.cookies,
-        resume_hash=args.resume_id,
+        resume_id=args.resume_id,
         letter_file=args.letter_file,
         force_letter=args.force_letter,
     )
