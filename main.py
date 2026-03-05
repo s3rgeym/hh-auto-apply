@@ -8,12 +8,15 @@ import random
 import re
 import sys
 import time
+from functools import partial
 from itertools import count
 from pathlib import Path
 from typing import Any, Iterator, TypedDict
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
+
+print = partial(print, flush=True)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -206,7 +209,7 @@ class HHAutoApplier:
 
     def get_vacancies(self) -> Iterator[Vacancy]:
         for page in count():
-            params = self.search_params | {"page": [str(page)]}
+            params = self.search_params | {"page": page}
             logger.debug(f"Ищем вакансии: {params}")
             response = self.request("GET", "/search/vacancy", params=params)
             temp = response.text.split(',"vacancies":')[1]
