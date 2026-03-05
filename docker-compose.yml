@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # Основной контейнер с приложением
   hh-app:
@@ -8,14 +6,16 @@ services:
     # Оставляем контейнер запущенным, чтобы Ofelia могла заходить в него по расписанию
     command: tail -f /dev/null
     env_file: .env
+    environment:
+      PYTHONUNBUFFERED: 1
     volumes:
-      - ./cookies.txt:/app/cookies.txt:ro
-      - ./letter.txt:/app/letter.txt:ro
+      - .:/app
     labels:
       ofelia.enabled: "true"
-      # Расписание берется из .env
-      ofelia.job-exec.hh-apply.schedule: ${OFELIA_SCHEDULE:-@every 4h}
-      ofelia.job-exec.hh-apply.command: "python main.py -u $SEARCH_URL"
+      # Этот пиво-сосичный ублюдок по-ходу это не добавил
+      ofelia.job-exec.hh-apply.run-on-startup: "true"
+      ofelia.job-exec.hh-apply.schedule: ${OFELIA_SCHEDULE:-@every 1h}
+      ofelia.job-exec.hh-apply.command: "python main.py -f -v -u $SEARCH_URL"
 
   # Планировщик Ofelia
   scheduler:
@@ -23,6 +23,10 @@ services:
     container_name: hh-scheduler
     depends_on:
       - hh-app
+    command: daemon --docker
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    restart: always
+      - ./logs:/logs
+    restart: unless-stopped
+    labels:
+      ofelia.save-folder: "/logs"

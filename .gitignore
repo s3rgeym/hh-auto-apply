@@ -1,4 +1,7 @@
 .venv
+.env
 cookies.txt
 search.html
 
+/logs/*.log
+/logs/*.json
