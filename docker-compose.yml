@@ -26,7 +26,7 @@ services:
     command: daemon --docker
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./logs:/logs
+      #- ./logs:/logs
     restart: unless-stopped
-    labels:
-      ofelia.save-folder: "/logs"
+    # labels:
+    #   ofelia.save-folder: "/logs"
