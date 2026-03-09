@@ -1,8 +1,6 @@
-.venv
-.env
-cookies.txt
-search.html
-
-/logs/*.log
-/logs/*.json
-applications.db
+/.venv
+/.env
+/cookies.txt
+/search.html
+/applications.db
+/log.txt*

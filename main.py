@@ -3,7 +3,7 @@ import argparse
 import http.cookiejar
 import json
 import logging
-import os.path
+import logging.handlers
 import random
 import re
 import sqlite3
@@ -17,6 +17,8 @@ from typing import Any, Iterator, TypedDict
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
+
+CURDIR = Path(__file__).parent.resolve()
 
 print = partial(print, flush=True)
 
@@ -75,7 +77,7 @@ VacancyData = TypedDict(
 
 
 class Database:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: Path):
         self.conn = sqlite3.connect(db_path)
         self.create_schema()
 
@@ -156,23 +158,23 @@ class HHAutoApplier:
     def __init__(
         self,
         search_url: str,
-        cookies_filename: str,
-        db_path: str,
+        cookies_path: Path,
+        db_path: Path,
         resume_id: str | None = None,
-        letter_file: str | None = None,
+        letter_file: Path | None = None,
         force_letter: bool = False,
         max_responses: int | None = None,
     ) -> None:
         self.force_letter = force_letter
         self.letter_template = (
-            open(letter_file, encoding="utf-8").read()
-            if letter_file and os.path.exists(letter_file)
+            letter_file.read_text(encoding="utf-8")
+            if letter_file and letter_file.exists()
             else None
         )
         parsed = urlparse(search_url)
         self.base_url = f"{parsed.scheme}://{parsed.netloc}"
         self.search_params = parse_qs(parsed.query)
-        self.cookies_path = Path(cookies_filename)
+        self.cookies_path = cookies_path
         self.max_responses = max_responses
         self.session = self.get_session()
         self.resume_id = resume_id or self.get_latest_resume_hash()
@@ -367,12 +369,16 @@ class HHAutoApplier:
                         if err == "negotiations-limit-exceeded":
                             logger.info("Суточный лимит откликов исчерпан")
                             return
+
                         logger.error(f"{err}: {vacancy_url}")
                         continue
 
                     if result.get("success"):
                         self.db.save_application(vacancy)
-                        logger.info(f"Отклик успешно отправлен: {vacancy_name}")
+                        logger.debug(
+                            f"Отклик успешно отправлен: {vacancy_url} ({vacancy_name})"
+                        )
+                        print("Отклик отправлен", vacancy_url, vacancy_name)
                 except Exception as ex:
                     logger.error(
                         f"Ошибка при обработке ID {vacancy.get('vacancyId')}: {ex}"
@@ -383,25 +389,38 @@ class HHAutoApplier:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Автоматизация откликов на вакансии HH.ru"
+        description="Автоматическая рассылка откликов на вакансии HH.ru"
     )
     parser.add_argument("-u", "--url", required=True, help="URL поискового запроса")
     parser.add_argument(
         "-c",
         "--cookies",
-        default="cookies.txt",
-        help="Путь к файлу сессии (MozillaCookieJar)",
+        type=Path,
+        default=CURDIR / "cookies.txt",
+        help="Путь к cookies",
     )
     parser.add_argument(
-        "-d", "--database", default="applications.db", help="Путь к базе данных SQLite"
+        "-d",
+        "--database",
+        type=Path,
+        default=CURDIR / "applications.db",
+        help="Путь к базе данных для сохранения откликов",
     )
     parser.add_argument(
-        "-r", "--resume-id", help="Хэш резюме (по умолчанию используется последнее)"
+        "-log",
+        "--log-file",
+        type=Path,
+        default=CURDIR / "log.txt",
+        help="Путь к файлу лога",
+    )
+    parser.add_argument(
+        "-r", "--resume-id", help="ID резюме или будет использовано последнее"
     )
     parser.add_argument(
         "-l",
         "--letter-file",
-        default="letter.txt",
+        type=Path,
+        default=CURDIR / "letter.txt",
         help="Путь к шаблону сопроводительного письма",
     )
     parser.add_argument(
@@ -411,22 +430,37 @@ def main() -> int:
         help="Принудительная отправка письма",
     )
     parser.add_argument(
-        "-mr", "--max-responses", type=int, help="Верхний порог количества откликов"
+        "-mr",
+        "--max-responses",
+        type=int,
+        help="Максимальное количества откликов для вакансии",
     )
     parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="Активировать расширенное логирование",
+        help="Подробное логирование",
     )
 
     args = parser.parse_args()
+
+    file_handler = logging.handlers.RotatingFileHandler(
+        args.log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=1,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    )
+    logger.addHandler(file_handler)
+
     if args.verbose:
         logger.setLevel(logging.DEBUG)
 
     applier = HHAutoApplier(
         search_url=args.url,
-        cookies_filename=args.cookies,
+        cookies_path=args.cookies,
         db_path=args.database,
         resume_id=args.resume_id,
         letter_file=args.letter_file,
@@ -436,9 +470,10 @@ def main() -> int:
 
     try:
         applier.apply_vacancies()
-        return 0
+        return
     except KeyboardInterrupt:
-        return 0
+        logger.warning("Interrupted by user")
+        return 2
     except Exception as ex:
         logger.exception(ex)
         return 1
