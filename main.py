@@ -380,7 +380,11 @@ class HHAutoApplier:
                         )
                         print("Отклик отправлен", vacancy_url, vacancy_name)
                     else:
-                        logger.error("Неизвестная ошибка при отклике на вакансию: %s (%s)", vacancy_url, vacancy_name))
+                        logger.error(
+                            "Неизвестная ошибка при отклике на вакансию: %s (%s)",
+                            vacancy_url,
+                            vacancy_name,
+                        )
                 except Exception as ex:
                     logger.error(
                         f"Ошибка при обработке ID {vacancy.get('vacancyId')}: {ex}"
