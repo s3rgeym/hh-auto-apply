@@ -5,3 +5,4 @@ search.html
 
 /logs/*.log
 /logs/*.json
+applications.db

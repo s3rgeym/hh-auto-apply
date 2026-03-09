@@ -6,8 +6,10 @@ import logging
 import os.path
 import random
 import re
+import sqlite3
 import sys
 import time
+from datetime import datetime
 from functools import partial
 from itertools import count
 from pathlib import Path
@@ -18,38 +20,118 @@ import requests
 
 print = partial(print, flush=True)
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
 
-Vacancy = TypedDict(
-    "Vacancy",
+class ColorFormatter(logging.Formatter):
+    RED = "\x1b[31;20m"
+    GREEN = "\x1b[32;20m"
+    YELLOW = "\x1b[33;20m"
+    BLUE = "\x1b[34;20m"
+    PURPLE = "\x1b[35;20m"
+    CYAN = "\x1b[36;20m"
+    LIGHT_GREY = "\x1b[37;20m"
+    GREY = "\x1b[38;20m"
+    BOLD_RED = "\x1b[31;1m"
+    RESET = "\x1b[0m"
+    FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
+    FORMATS = {
+        logging.DEBUG: LIGHT_GREY + FORMAT + RESET,
+        logging.INFO: GREEN + FORMAT + RESET,
+        logging.WARNING: YELLOW + FORMAT + RESET,
+        logging.ERROR: RED + FORMAT + RESET,
+        logging.CRITICAL: BOLD_RED + FORMAT + RESET,
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
+
+
+logger = logging.getLogger(__name__)
+handler = logging.StreamHandler()
+handler.setFormatter(ColorFormatter())
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+VacancyData = TypedDict(
+    "VacancyData",
     {
-        "@isAdv": bool,
-        "@responseLetterRequired": bool,
-        "@showContact": bool,
-        "@workSchedule": str,
-        "acceptLaborContract": bool,
-        "allowChatWithManager": bool,
-        "civilLawContracts": list[dict[str, Any]],
-        "employment": dict[str, str],
-        "links": dict[str, str],
-        "name": str,
-        "professionalRoleIds": list[dict[str, Any]],
-        "responsesCount": int,
-        "searchRid": str,
-        "show_question_input": bool,
-        "totalResponsesCount": int,
-        "userLabels": list[str],
-        "userTestPresent": bool,
         "vacancyId": int,
-        "vacancyProperties": dict[str, Any],
-        "workExperience": str,
-        "workFormats": list[dict[str, Any]],
-        "workingTimeIntervals": list[dict[str, Any]],
+        "name": str,
+        "@workSchedule": str,
+        "links": dict[str, str],
+        "totalResponsesCount": int,
+        "area": dict[str, Any],
+        "company": dict[str, Any],
+        "compensation": dict[str, Any],
+        "creationTime": str,
+        "lastChangeTime": dict[str, Any],
+        "userLabels": list[str],
+        "@responseLetterRequired": bool,
+        "userTestPresent": bool,
     },
 )
+
+
+class Database:
+    def __init__(self, db_path: str):
+        self.conn = sqlite3.connect(db_path)
+        self.create_schema()
+
+    def create_schema(self):
+        with self.conn:
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS applications (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    work_schedule TEXT,
+                    url TEXT,
+                    created_at TIMESTAMP,
+                    updated_at TIMESTAMP,
+                    city TEXT,
+                    company_id INTEGER,
+                    company_name TEXT,
+                    company_url TEXT,
+                    salary_from INTEGER,
+                    salary_to INTEGER,
+                    salary_currency TEXT,
+                    responses_count INTEGER,
+                    applied_at TIMESTAMP
+                )
+            """)
+
+    def save_application(self, v: VacancyData):
+        comp = v.get("compensation") or {}
+        company = v.get("company") or {}
+
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO applications
+                (id, name, work_schedule, url, created_at, updated_at, city, company_id,
+                 company_name, company_url, salary_from, salary_to, salary_currency,
+                 responses_count, applied_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    v["vacancyId"],
+                    v["name"],
+                    v.get("@workSchedule"),
+                    v["links"].get("desktop"),
+                    v.get("creationTime"),
+                    v.get("lastChangeTime", {}).get("$"),
+                    v.get("area", {}).get("name"),
+                    company.get("id"),
+                    company.get("name"),
+                    company.get("companySiteUrl"),
+                    comp.get("from"),
+                    comp.get("to"),
+                    comp.get("currencyCode"),
+                    v.get("totalResponsesCount", 0),
+                    datetime.now().astimezone().isoformat(),
+                ),
+            )
 
 
 def rand_text(s: str) -> str:
@@ -75,9 +157,11 @@ class HHAutoApplier:
         self,
         search_url: str,
         cookies_filename: str,
+        db_path: str,
         resume_id: str | None = None,
         letter_file: str | None = None,
         force_letter: bool = False,
+        max_responses: int | None = None,
     ) -> None:
         self.force_letter = force_letter
         self.letter_template = (
@@ -87,11 +171,12 @@ class HHAutoApplier:
         )
         parsed = urlparse(search_url)
         self.base_url = f"{parsed.scheme}://{parsed.netloc}"
-        # self.base_search_url = parsed._replace(query="", fragment="").geturl()
         self.search_params = parse_qs(parsed.query)
         self.cookies_path = Path(cookies_filename)
+        self.max_responses = max_responses
         self.session = self.get_session()
         self.resume_id = resume_id or self.get_latest_resume_hash()
+        self.db = Database(db_path)
 
     @property
     def xsrf_token(self) -> str | None:
@@ -141,24 +226,21 @@ class HHAutoApplier:
         return data
 
     def send_response(self, payload: dict, referer_url: str) -> dict:
-        logger.debug("Отправляем отклик с данными: %r", payload)
         r = self.request(
             "POST",
             "/applicant/vacancy_response/popup",
             data=payload,
             headers={
-                # "Referer": referer_url,
                 "X-Hhtmfrom": "vacancy",
                 "X-Hhtmsource": "vacancy_response",
                 "X-Requested-With": "XMLHttpRequest",
                 "X-Xsrftoken": self.xsrf_token,
             },
         )
-        # r.raise_for_status()
-        # assert r.status_code >= 200
-        logger.debug("%d %s", r.status_code, r.url)
-        data = r.json()
-        return data
+        logger.debug(
+            "%d %s %s %r", r.status_code, r.request.method, r.request.url, payload
+        )
+        return r.json()
 
     def apply_vacancy(
         self, vacancy_id: int, referer_url: str, letter: str = ""
@@ -198,25 +280,45 @@ class HHAutoApplier:
         for task in test_data.get("tasks", []):
             field_name = f"task_{task['id']}"
             solutions = task.get("candidateSolutions") or []
-            # question = (task.get("description") or "").strip()
             if solutions:
-                # Чаще всего правильный ответ в середину пихают
                 payload[field_name] = solutions[len(solutions) // 2]["id"]
             else:
                 payload[f"{field_name}_text"] = "Да"
 
         return self.send_response(payload, response_url)
 
-    def get_vacancies(self) -> Iterator[Vacancy]:
+    def get_vacancies(self) -> Iterator[VacancyData]:
+        total_responses = 0
+        total_vacancies_count = 0
+
         for page in count():
             params = self.search_params | {"page": page}
-            logger.debug(f"Ищем вакансии: {params}")
             response = self.request("GET", "/search/vacancy", params=params)
+
             temp = response.text.split(',"vacancies":')[1]
             vacancies, _ = self.json_decoder.raw_decode(temp)
-            logger.debug("Найдено вакансий на странице: %d", len(vacancies))
+            logger.debug("Найдено вакансий %d на странице %d", len(vacancies), page + 1)
+
             if not vacancies:
                 break
+
+            total_vacancies_count += len(vacancies)
+            total_responses += sum(v["totalResponsesCount"] for v in vacancies)
+
+            logger.debug(
+                "Среднее количество откликов на вакансии: %d",
+                total_responses // total_vacancies_count,
+            )
+
+            if self.max_responses:
+                vacancies = list(
+                    filter(
+                        lambda v: self.max_responses >= v["totalResponsesCount"],
+                        vacancies,
+                    )
+                )
+
+            logger.debug("Вакансий после фильтров: %d", len(vacancies))
             yield from vacancies
             self.rand_delay(max_sec=5.0)
 
@@ -232,86 +334,90 @@ class HHAutoApplier:
                     vacancy_name = vacancy["name"]
 
                     if vacancy.get("userLabels"):
-                        logger.debug("Пропускаем вакансию с откликом %s", vacancy_url)
                         continue
 
                     is_letter_required = vacancy.get("@responseLetterRequired", False)
                     if is_letter_required and not self.letter_template:
-                        logger.warning(
-                            "Для отклика на вакансию требуется сопроводительное: %s",
-                            vacancy_url,
-                        )
+                        logger.warning("Требуется письмо: %s", vacancy_url)
                         continue
 
                     letter = (
-                        rand_text(self.letter_template)  # pyright: ignore[reportArgumentType]
-                        if is_letter_required or self.force_letter
+                        rand_text(self.letter_template).replace(
+                            "%vacancyName%", vacancy_name
+                        )
+                        if (is_letter_required or self.force_letter)
+                        and self.letter_template
                         else ""
-                    ).replace("%vacancyName%", vacancy_name)
+                    )
 
                     self.rand_delay()
 
+                    logger.debug(
+                        f"Пробуем откликнуться на вакансию {vacancy_name!r} ({vacancy_url}; откликов: {vacancy.get('totalResponsesCount', 0)})"
+                    )
+
                     if vacancy.get("userTestPresent"):
-                        logger.debug(
-                            "Пробуем откликнуться на вакансию с тестом: %s", vacancy_url
-                        )
                         result = self.apply_vacancy_with_test(vacancy_id, letter=letter)
                     else:
-                        logger.debug(
-                            "Пробуем откликнуться на вакансию: %s", vacancy_url
-                        )
                         result = self.apply_vacancy(
                             vacancy_id, vacancy_url, letter=letter
                         )
 
-                    # logger.debug(result)
                     if err := result.get("error"):
                         if err == "negotiations-limit-exceeded":
-                            logger.info("Достигли лимита на отклики!")
+                            logger.info("Суточный лимит откликов исчерпан")
                             return
-
-                        logger.error(err)
+                        logger.error(f"{err}: {vacancy_url}")
                         continue
 
-                    assert result.get("success")
-                    print(
-                        f"Отправили отклик на {vacancy_url}: {vacancy_name} (откликов: {vacancy['totalResponsesCount']})"
+                    if result.get("success"):
+                        self.db.save_application(vacancy)
+                        logger.info(f"Отклик успешно отправлен: {vacancy_name}")
+                except Exception as ex:
+                    logger.error(
+                        f"Ошибка при обработке ID {vacancy.get('vacancyId')}: {ex}"
                     )
-                except requests.RequestException as ex:
-                    logger.error(ex)
         finally:
             self.save_cookies()
 
 
-def main() -> None | int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-u", "--url", help="Ссылка, используемая для поиска вакансий", required=True
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Автоматизация откликов на вакансии HH.ru"
     )
-    parser.add_argument("-c", "--cookies", help="Путь до кукис", default="cookies.txt")
+    parser.add_argument("-u", "--url", required=True, help="URL поискового запроса")
     parser.add_argument(
-        "-r", "--resume-id", "--resume", help="Резюме используемое для откликов"
+        "-c",
+        "--cookies",
+        default="cookies.txt",
+        help="Путь к файлу сессии (MozillaCookieJar)",
+    )
+    parser.add_argument(
+        "-d", "--database", default="applications.db", help="Путь к базе данных SQLite"
+    )
+    parser.add_argument(
+        "-r", "--resume-id", help="Хэш резюме (по умолчанию используется последнее)"
     )
     parser.add_argument(
         "-l",
         "--letter-file",
-        "--letter",
         default="letter.txt",
-        help=(
-            "Файл с сопроводительным письмом."
-            " Выбор случайного варианта: {вариант 1|вариант 2|вариант 3}."
-            " Варианты могут быть вложенными."
-            " %%vacancyName%% будет заменено на название вакансии."
-        ),
+        help="Путь к шаблону сопроводительного письма",
     )
     parser.add_argument(
         "-f",
         "--force-letter",
-        help="Отправлять сопроводительное всегда",
         action="store_true",
+        help="Принудительная отправка письма",
     )
     parser.add_argument(
-        "-v", "--verbose", help="Более подробный вывод", action="store_true"
+        "-mr", "--max-responses", type=int, help="Верхний порог количества откликов"
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Активировать расширенное логирование",
     )
 
     args = parser.parse_args()
@@ -321,18 +427,21 @@ def main() -> None | int:
     applier = HHAutoApplier(
         search_url=args.url,
         cookies_filename=args.cookies,
+        db_path=args.database,
         resume_id=args.resume_id,
         letter_file=args.letter_file,
         force_letter=args.force_letter,
+        max_responses=args.max_responses,
     )
 
     try:
-        return applier.apply_vacancies()
+        applier.apply_vacancies()
+        return 0
     except KeyboardInterrupt:
-        pass
+        return 0
     except Exception as ex:
         logger.exception(ex)
-    return 1
+        return 1
 
 
 if __name__ == "__main__":

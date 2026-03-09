@@ -14,8 +14,8 @@ services:
       ofelia.enabled: "true"
       # Этот пиво-сосичный ублюдок по-ходу это не добавил
       ofelia.job-exec.hh-apply.run-on-startup: "true"
-      ofelia.job-exec.hh-apply.schedule: ${OFELIA_SCHEDULE:-@every 1h}
-      ofelia.job-exec.hh-apply.command: "python main.py -f -v -u $SEARCH_URL"
+      ofelia.job-exec.hh-apply.schedule: ${OFELIA_SCHEDULE:-@every 8h}
+      ofelia.job-exec.hh-apply.command: "python main.py -f -ms 300 -v -u $SEARCH_URL"
 
   # Планировщик Ofelia
   scheduler:
