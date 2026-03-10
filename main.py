@@ -52,8 +52,9 @@ class ColorFormatter(logging.Formatter):
         }
 
     def format(self, record):
-        fmtr = self._formatters.get(record.levelno)
-        return fmtr.format(record) if fmtr else super().format(record)
+        if formatter := self._formatters.get(record.levelno):
+            return formatter.format(record)
+        return super().format(record)
 
 
 logger = logging.getLogger(__name__)
