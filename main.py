@@ -36,18 +36,24 @@ class ColorFormatter(logging.Formatter):
     RESET = "\x1b[0m"
     FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 
-    FORMATS = {
-        logging.DEBUG: LIGHT_GREY + FORMAT + RESET,
-        logging.INFO: GREEN + FORMAT + RESET,
-        logging.WARNING: YELLOW + FORMAT + RESET,
-        logging.ERROR: RED + FORMAT + RESET,
-        logging.CRITICAL: BOLD_RED + FORMAT + RESET,
+    LOG_COLORS = {
+        logging.DEBUG: LIGHT_GREY,
+        logging.INFO: GREEN,
+        logging.WARNING: YELLOW,
+        logging.ERROR: RED,
+        logging.CRITICAL: BOLD_RED,
     }
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._formatters = {
+            level: logging.Formatter(f"{color}{self.FORMAT}{self.RESET}")
+            for level, color in self.LOG_COLORS.items()
+        }
+
     def format(self, record):
-        log_fmt = self.FORMATS.get(record.levelno)
-        formatter = logging.Formatter(log_fmt)
-        return formatter.format(record)
+        fmtr = self._formatters.get(record.levelno)
+        return fmtr.format(record) if fmtr else super().format(record)
 
 
 logger = logging.getLogger(__name__)
@@ -393,7 +399,7 @@ class HHAutoApplier:
             self.save_cookies()
 
 
-def main() -> int:
+def main() -> int | None:
     parser = argparse.ArgumentParser(
         description="Автоматическая рассылка откликов на вакансии HH.ru"
     )
