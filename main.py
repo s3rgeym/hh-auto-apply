@@ -171,6 +171,7 @@ class HHAutoApplier:
         letter_file: Path | None = None,
         force_letter: bool = False,
         max_responses: int | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.force_letter = force_letter
         self.letter_template = (
@@ -185,6 +186,7 @@ class HHAutoApplier:
         self.max_responses = max_responses
         self.session = self.get_session()
         self.resume_id = resume_id or self.get_latest_resume_hash()
+        self.dry_run = dry_run
         self.db = Database(db_path)
 
     @property
@@ -359,11 +361,19 @@ class HHAutoApplier:
                         else ""
                     )
 
-                    self.rand_delay()
+                    if self.dry_run:
+                        logger.debug(
+                            "Пропускаем отклик на %s (%s), тк передан флаг --dry-run",
+                            vacancy_url,
+                            vacancy_name,
+                        )
+                        continue
 
                     logger.debug(
                         f"Пробуем откликнуться на вакансию {vacancy_name!r} ({vacancy_url}; откликов: {vacancy.get('totalResponsesCount', 0)})"
                     )
+
+                    self.rand_delay()
 
                     if vacancy.get("userTestPresent"):
                         result = self.apply_vacancy_with_test(vacancy_id, letter=letter)
@@ -396,6 +406,9 @@ class HHAutoApplier:
                     logger.error(
                         f"Ошибка при обработке ID {vacancy.get('vacancyId')}: {ex}"
                     )
+
+            logger.debug("Рассылка откликов завешена.")
+            print("Завершили работу!")
         finally:
             self.save_cookies()
 
@@ -454,6 +467,9 @@ def main() -> int | None:
         action="store_true",
         help="Подробное логирование",
     )
+    parser.add_argument(
+        "--dry-run", "-n", action="store_true", help="Не рассылать реальные отклики"
+    )
 
     args = parser.parse_args()
 
@@ -477,6 +493,7 @@ def main() -> int | None:
         letter_file=args.letter_file,
         force_letter=args.force_letter,
         max_responses=args.max_responses,
+        dry_run=args.dry_run,
     )
 
     try:
