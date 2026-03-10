@@ -145,13 +145,13 @@ class Database:
 
 def rand_text(s: str) -> str:
     while (
-        s1 := re.sub(
+        r := re.sub(
             r"{([^{}]+)}",
             lambda m: random.choice(m.group(1).split("|")),
             s,
         )
     ) != s:
-        s = s1
+        s = r
     return s
 
 
@@ -457,16 +457,14 @@ def main() -> int | None:
 
     args = parser.parse_args()
 
-    file_handler = logging.handlers.RotatingFileHandler(
+    fh = logging.handlers.RotatingFileHandler(
         args.log_file,
         maxBytes=10 * 1024 * 1024,  # 10MB
         backupCount=1,
         encoding="utf-8",
     )
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    )
-    logger.addHandler(file_handler)
+    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logger.addHandler(fh)
 
     if args.verbose:
         logger.setLevel(logging.DEBUG)
