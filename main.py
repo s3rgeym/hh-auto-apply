@@ -483,10 +483,8 @@ def main() -> int | None:
 
     try:
         applier.apply_vacancies()
-        return
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
-        return 2
     except Exception as ex:
         logger.exception(ex)
         return 1
