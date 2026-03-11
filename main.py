@@ -321,16 +321,8 @@ class HHAutoApplier:
                 total_responses // total_vacancies_count,
             )
 
-            if self.max_responses:
-                vacancies = list(
-                    filter(
-                        lambda v: self.max_responses >= v["totalResponsesCount"],
-                        vacancies,
-                    )
-                )
-
-            logger.debug("Вакансий после фильтров: %d", len(vacancies))
             yield from vacancies
+
             self.rand_delay(max_sec=5.0)
 
     def rand_delay(self, min_sec: float = 1.0, max_sec: float = 3.0) -> None:
@@ -345,9 +337,22 @@ class HHAutoApplier:
                     vacancy_name = vacancy["name"]
 
                     if vacancy.get("userLabels"):
+                        logger.debug("Пропускаем вакансию с откликом: %s", vacancy_url)
                         continue
 
+                    if (
+                        self.max_responses
+                        and vacancy["totalResponsesCount"] > self.max_responses
+                    ):
+                        logger.debug(
+                            "Вакансия имеет слишком много откликов: %s; %d > %d",
+                            vacancy_url,
+                            vacancy["totalResponsesCount"],
+                            self.max_responses,
+                        )
+
                     is_letter_required = vacancy.get("@responseLetterRequired", False)
+
                     if is_letter_required and not self.letter_template:
                         logger.warning("Требуется письмо: %s", vacancy_url)
                         continue
@@ -361,17 +366,17 @@ class HHAutoApplier:
                         else ""
                     )
 
-                    if self.dry_run:
-                        logger.debug(
-                            "Пропускаем отклик на %s (%s), тк передан флаг --dry-run",
-                            vacancy_url,
-                            vacancy_name,
-                        )
-                        continue
-
                     logger.debug(
                         f"Пробуем откликнуться на вакансию {vacancy_name!r} ({vacancy_url}; откликов: {vacancy.get('totalResponsesCount', 0)})"
                     )
+
+                    if self.dry_run:
+                        # logger.debug(
+                        #     "Пропускаем отклик на %s (%s), тк передан флаг --dry-run",
+                        #     vacancy_url,
+                        #     vacancy_name,
+                        # )
+                        continue
 
                     self.rand_delay()
 
