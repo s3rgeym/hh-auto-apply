@@ -292,7 +292,10 @@ class HHAutoApplier:
             field_name = f"task_{task['id']}"
             solutions = task.get("candidateSolutions") or []
             if solutions:
-                payload[field_name] = solutions[len(solutions) // 2]["id"]
+                yes = next(filter(lambda v: v["text"].lower() == "да", solutions), None)
+                payload[field_name] = (
+                    yes["id"] if yes else solutions[len(solutions) // 2]["id"]
+                )
             else:
                 payload[f"{field_name}_text"] = "Да"
 
@@ -350,6 +353,8 @@ class HHAutoApplier:
                             vacancy["totalResponsesCount"],
                             self.max_responses,
                         )
+
+                        continue
 
                     is_letter_required = vacancy.get("@responseLetterRequired", False)
 
